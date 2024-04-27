@@ -1,0 +1,46 @@
+version: 0.2
+env:
+  variables:
+    CLIENT_ECR_URI: "904569689818.dkr.ecr.sa-east-1.amazonaws.com/milunaeksdemo-client"
+    SERVER_ECR_URI: "904569689818.dkr.ecr.sa-east-1.amazonaws.com/milunaeksdemo-server"
+    EKS_CLUSTER_NAME: milunaeksdemo_eks_cluster
+phases:
+  pre_build:
+    commands:
+      - pip3 install -r requirements.txt
+      - echo "Generando los protobufs..." 
+      - chmod +x scripts/generate_proto.sh && ./scripts/generate_proto.sh
+      - echo "Recuperando commit del hash"
+      - COMMIT_HASH=$(git rev-parse HEAD)
+      
+  build:
+    commands:
+      - echo "Construyendo y etiquetando la imagen del cliente..."
+      - chmod +x scripts/build_docker_images.sh && ./scripts/build_docker_images.sh $CLIENT_ECR_URI:$COMMIT_HASH $SERVER_ECR_URI:$COMMIT_HASH
+      
+  
+  post_build:
+    commands:
+      - echo "LOGIN A ECR..."
+      - $(aws ecr get-login --no-include-email)
+      - echo "Subiendo imagen del cliente a ECR..."
+      - chmod +x scripts/push_images.sh && ./scripts/push_images.sh
+      
+      - echo "Actualizando archivos de deployment de Kubernetes..."
+      - chmod +x scripts/write_client_deployment.sh && chmod +x scripts/write_server_deployment.sh
+      - ./scripts/write_client_deployment.sh $CLIENT_ECR_URI:$COMMIT_HASH
+      - ./scripts/write_server_deployment.sh $SERVER_ECR_URI:$COMMIT_HASH
+
+      - aws eks update-kubeconfig --region sa-east-1 --name $EKS_CLUSTER_NAME
+      - echo "Aplicando los cambios al clúster de EKS..."
+      - kubectl get nodes
+      - kubectl apply -f ./eks_files/deployment_client.yaml
+      - kubectl apply -f ./eks_files/deployment_server.yaml
+      - kubectl apply -f ./eks_files/service_server.yaml
+      - kubectl apply -f ./eks_files/service_client.yaml
+      - kubectl apply -f ./eks_files/ingress.yaml
+      - kubectl apply -f ./eks_files/deployment_mongo.yaml
+      - kubectl apply -f ./eks_files/mongo-init.yaml
+
+
+      
